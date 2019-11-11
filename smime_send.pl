@@ -12,8 +12,7 @@ use IO::Select;
 use Net::SMTP;
 use MIME::Base64 qw( encode_base64 decode_base64);
 use MIME::QuotedPrint;
-use Symbol;
-use open qw( :std :utf8 );
+use Symbol;                     # for gensym
 
 my $VERSION = '1.0';
 
@@ -86,7 +85,11 @@ my $body;
 my $bound = new_boundary();
 $body .= new_mm('multipart/mixed', $bound);
 
-$body .= add_part(mime => 'text/plain', content => $message, boundary => $bound);
+if (ValidUTF8($message)){
+    $body .= add_part(mime => 'text/plain; charset=utf-8', content => $message, boundary => $bound);
+} else {
+    $body .= add_part(mime => 'text/plain', content => $message, boundary => $bound);
+}
 
 # process attachments
 for my $a (@attachments){
@@ -143,7 +146,7 @@ sub run_cmd {
     my ($cmd, $input) = @_;
     my ($infh,$outfh,$errfh,$pid, $out, $err);
     $out = $err = '';
-    $errfh = gensym();
+    $errfh = gensym();          # autovivified lexical cannot be used, generate a new symbol instead
     $pid = open3($infh, $outfh, $errfh, $cmd);
     my $sel = new IO::Select;
     $sel->add($outfh,$errfh);
@@ -260,9 +263,26 @@ sub ValidUTF8 {
     }
 }
 
+# poor man's hex dumper :)
+sub hexdump {
+    my $data = shift;
+    my $data_len = shift || 16;
+    my $hex_len = $data_len * 3;
+    my $addr = 0;
+    my @out;
+    for my $s (unpack("(a${data_len})*", $data)){
+        last unless $s;
+        my $h = join' ', unpack('(H2)*', $s);
+        $s =~ s/[\x00-\x1f]/./g;
+        push @out, sprintf("%06x  %-${hex_len}s %s", $addr, $h, $s);
+        $addr += length($s);
+    }
+    return @out;
+}
+
 sub usage {
     my $cmd = basename($0);
-    say "Usage: ${cmd} [options] <message>
+    say "Usage: ${cmd} [options] <message_or_file>
     -x smtp_server         - default is 127.0.0.1
     -t to
     -f from                - optional, but strongly encouraged
