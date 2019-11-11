@@ -55,13 +55,13 @@ my $crypt  = $opts->{C};
 my $sign = $opts->{S};
 my $smtp = $opts->{x} || '127.0.0.1';
 
-# I will not support utf-8 in addresses for now...
 my $recipient = $opts->{t};
-# my $recipient = ValidUTF8($opts->{t}) ? '=?UTF-8?Q?' . encode_qp($opts->{t}, '') . '?=' : $opts->{t};
+$recipient = parse_address($recipient);
+
 my $from = $opts->{f};
-# my $from = '=?UTF-8?Q?' . encode_qp($opts->{f}, '') . '?=';
-# my $subject = $opts->{s};#'=?UTF-8?Q?' . encode_qp($opts->{s});
-my $subject = ValidUTF8($opts->{s}) ? '=?utf-8?Q?' . encode_qp($opts->{s}, '') . '?=' : $opts->{s};
+$from = parse_address($from) if $from;
+
+my $subject = is_valid_utf8($opts->{s}) ? encode_quoted_utf8($opts->{s}) : $opts->{s};
 my $message = '';
 my @attachments = ();
 if ($opts->{a}){
@@ -85,7 +85,7 @@ my $body;
 my $bound = new_boundary();
 $body .= new_mm('multipart/mixed', $bound);
 
-if (ValidUTF8($message)){
+if (is_valid_utf8($message)){
     $body .= add_part(mime => 'text/plain; charset=utf-8', content => $message, boundary => $bound);
 } else {
     $body .= add_part(mime => 'text/plain', content => $message, boundary => $bound);
@@ -137,7 +137,7 @@ BODY
 say "Final Body:\n$body" if $LOG_LVL == TRACE;
 
 # send to MX
-send_mail($from,$recipient,$subject,$body);
+send_mail($from, $recipient, $body);
 
 say "Sent.";
 
@@ -233,7 +233,9 @@ sub new_mm {
 
 # send mail helper
 sub send_mail {
-    my ($from, $to, $subject, $message) = @_;
+    my ($from, $to, $message) = @_;
+    
+    
     my $agent = sprintf "%s v%s", basename($0), $VERSION;
     my $smtp = new Net::SMTP($smtp,
                            Timeout => 180,
@@ -250,8 +252,32 @@ MSG
     $smtp->quit();
 }
 
-# ValidUTF8 came from: http://people.netscape.com/ftang/utf8/isutf8.pl
-sub ValidUTF8 {
+sub encode_quoted_utf8 {
+    my $str = shift;
+    $str = '=?utf-8?Q?' . encode_qp($str, '') . '?=';
+    return $str;
+}
+
+# sanitize address
+sub parse_address {
+    my $address = shift;
+    my $display_name = '';
+    $address =~ s/\([^\)]*\)//g;   # remove comments - or old way to give display name
+    if ($address =~ /(.*)?\s?<([^>]+)>/){
+        $display_name = $1;
+        $address = $2;
+    }
+    if ($display_name){
+        if (is_valid_utf8($display_name)){
+            $display_name = encode_quoted_utf8($display_name);
+        }
+        $display_name = "${display_name} <${address}>";
+    }
+    return $display_name || $address;
+}
+
+# is_valid_utf8 came from: http://people.netscape.com/ftang/utf8/isutf8.pl
+sub is_valid_utf8 {
     my $utf8 = pop (@_);
     
     if($utf8 =~ /^(([\0-\x7F])|([\xC0-\xDF][\x80-\xBF])|([\xE0-\xEF][\x80-\xBF][\x80-\xBF])|([\xF0-\xF7][\x80-\xBF][\x80-\xBF][\x80-\xBF])|([\xF8-\xFB][\x80-\xBF][\x80-\xBF][\x80-\xBF][\x80-\xBF])|([\xFC-\xFE][\x80-\xBF][\x80-\xBF][\x80-\xBF][\x80-\xBF][\x80-\xBF]))*$/)
