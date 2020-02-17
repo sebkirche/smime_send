@@ -1,4 +1,4 @@
-#!/bin/env perl
+#!/usr/bin/env perl
 
 use strict;
 use warnings;
@@ -12,6 +12,7 @@ use IO::Select;
 use Net::SMTP;
 use MIME::Base64 qw( encode_base64 decode_base64);
 use MIME::QuotedPrint;
+use POSIX;
 use Symbol;                     # for gensym
 
 my $VERSION = '1.0';
@@ -24,6 +25,8 @@ use constant TRACE => 4;
 my $LOG_LVL = INFO;
 
 $|++;
+
+setlocale(LC_TIME, 'C');        # use standard time formating for Date: header
 
 my $opts = {};
 if (scalar @ARGV == 0){
@@ -125,10 +128,13 @@ if ($sign){
 
 # fill missing headers when not signing
 unless ($sign){
+    my $date = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
+    # my $date = 'Mon,  6 Jan 2020 20:34:38 +0100 (CET)'; # a fixed date for test
     $body = "From: ${from}\n${body}" if $from;
     $body = <<BODY
 To: ${recipient}
 Subject: ${subject}
+Date: ${date}
 MIME-Version: 1.0
 ${body}
 BODY
@@ -140,6 +146,10 @@ say "Final Body:\n$body" if $LOG_LVL == TRACE;
 send_mail($from, $recipient, $body);
 
 say "Sent.";
+
+exit 0;
+
+#---------------------------------------------------------------------------------------------------
 
 # run a child command, send the given input and return both STDOUT & STDERR of the process
 sub run_cmd {
