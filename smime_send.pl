@@ -1,5 +1,8 @@
 #!/usr/bin/env perl
 
+# smime_send.pl - simple helper that can send multipart emails w/ attachments,
+#                 sign & encrypt messages 
+
 use strict;
 use warnings;
 use feature 'say';
@@ -15,7 +18,7 @@ use MIME::QuotedPrint;
 use POSIX;
 use Symbol;                     # for gensym
 
-my $VERSION = '1.0';
+my $VERSION = '1.1';
 
 # Poor man's logger
 use constant ERROR => 1;
@@ -77,7 +80,7 @@ if ($opts->{a}){
     }
 }
 
-# read stdin / input file
+# read stdin / input file            TODO: need to handle empty input
 while (defined (my $line = <>)){
     $message .= $line;
 }
@@ -112,7 +115,6 @@ if ($crypt){
 }
 
 say "Body - before sign:\n$body" if $LOG_LVL == TRACE;
-
 # process signing
 if ($sign){
     my $from = '';
@@ -124,10 +126,8 @@ if ($sign){
     # chomp $signed_body;
     say "Body: $signed_body";
     $body = $signed_body;
-}
-
-# fill missing headers when not signing
-unless ($sign){
+} else {
+    # fill missing headers when not signing
     my $date = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
     # my $date = 'Mon,  6 Jan 2020 20:34:38 +0100 (CET)'; # a fixed date for test
     $body = "From: ${from}\n${body}" if $from;
@@ -252,7 +252,7 @@ sub send_mail {
                            $LOG_LVL == TRACE ? (Debug => 1) : ()
         ) or die "Cannot connect to SMTP: $@";
     $smtp->mail($from);
-    $smtp->to($to);
+    $smtp->to(split /,/, $to);
     $smtp->data();
     $smtp->datasend(<<"MSG");
 User-Agent: ${agent}
@@ -320,7 +320,8 @@ sub usage {
     my $cmd = basename($0);
     say "Usage: ${cmd} [options] <message_or_file>
     -x smtp_server         - default is 127.0.0.1
-    -t to
+    -t to                  - mail recipient (multiple coma-separated values accepted
+                                             NOT SUPPORTED YET FOR ENCRYPTION)
     -f from                - optional, but strongly encouraged
     -s subject
     -a file1[,file2,fileN] - optional, several filenames separated by coma accepted
