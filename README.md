@@ -9,6 +9,7 @@ A simple command-line Perl email helper that can send multipart messages with at
     -f from                - optional, but strongly encouraged
     -s subject
     -a file1[,file2,fileN] - optional, several filenames separated by coma accepted
+    -m mime-type           - optional, force mime-type for message encoding (disable utf-8 validation)
     -S                     - sign the mail (optional)
     -c cert                - certificate for signing (optional, default = smime.cert)
     -k key                 - key for signing         (optional, default = smime.key)

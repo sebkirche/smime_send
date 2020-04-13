@@ -36,7 +36,7 @@ if (scalar @ARGV == 0){
     usage();
     exit 1;
 }
-unless (getopts("dt:f:s:a:c:k:r:x:SC:?h", $opts)){
+unless (getopts("dt:f:s:a:c:k:r:m:x:SC:?h", $opts)){
     usage();
     exit 1;
 }
@@ -60,6 +60,7 @@ my $root = $opts->{r} ? "-certfile $opts->{r}" : '';
 my $crypt  = $opts->{C};
 my $sign = $opts->{S};
 my $smtp = $opts->{x} || '127.0.0.1';
+my $mime_type = $opts->{m};
 
 my $recipient = $opts->{t};
 $recipient = parse_address($recipient);
@@ -91,7 +92,9 @@ my $body;
 my $bound = new_boundary();
 $body .= new_mm('multipart/mixed', $bound);
 
-if (is_valid_utf8($message)){
+if ($mime_type){
+    $body .= add_part(mime => $mime_type, content => $message, boundary => $bound);
+} elsif (is_valid_utf8($message)){
     $body .= add_part(mime => 'text/plain; charset=utf-8', content => $message, boundary => $bound);
 } else {
     $body .= add_part(mime => 'text/plain', content => $message, boundary => $bound);
@@ -104,7 +107,7 @@ for my $a (@attachments){
 
 $body .= last_part($bound);
 
-say "Body - before enc/sign:\n$body" if $LOG_LVL == TRACE;
+say boxquote($body, "Body - before enc/sign") if $LOG_LVL == TRACE;
 
 # process encryption
 if ($crypt){
@@ -114,7 +117,7 @@ if ($crypt){
     $body = $enc_body;
 }
 
-say "Body - before sign:\n$body" if $LOG_LVL == TRACE;
+say boxquote($body, "Body - before sign") if $LOG_LVL == TRACE;
 # process signing
 if ($sign){
     my $from = '';
@@ -124,7 +127,7 @@ if ($sign){
     my ($signed_body, $err) = run_cmd($cmd_sign, $body);
     die $err if $err;
     # chomp $signed_body;
-    say "Body: $signed_body";
+    say boxquote($signed_body, "signed body");
     $body = $signed_body;
 } else {
     # fill missing headers when not signing
@@ -140,7 +143,7 @@ ${body}
 BODY
 }
 
-say "Final Body:\n$body" if $LOG_LVL == TRACE;
+say boxquote($body, "Final Body") if $LOG_LVL == TRACE;
 
 # send to MX
 send_mail($from, $recipient, $body);
@@ -247,19 +250,23 @@ sub send_mail {
     
     
     my $agent = sprintf "%s v%s", basename($0), $VERSION;
-    my $smtp = new Net::SMTP($smtp,
+    my $mx = new Net::SMTP($smtp,
                            Timeout => 180,
                            $LOG_LVL == TRACE ? (Debug => 1) : ()
-        ) or die "Cannot connect to SMTP: $@";
-    $smtp->mail($from);
-    $smtp->to(split /,/, $to);
-    $smtp->data();
-    $smtp->datasend(<<"MSG");
+        );
+    unless ($mx){
+        say "Cannot use the default SMTP at $smtp: $@\nPlease look at the -x <smtp_server> parameter.";
+        exit 1;
+    }
+    $mx->mail($from);
+    $mx->to(split /,/, $to);
+    $mx->data();
+    $mx->datasend(<<"MSG");
 User-Agent: ${agent}
 ${message}
 MSG
-    $smtp->dataend();
-    $smtp->quit();
+    $mx->dataend();
+    $mx->quit();
 }
 
 sub encode_quoted_utf8 {
@@ -299,6 +306,17 @@ sub is_valid_utf8 {
     }
 }
 
+# improved quoting of text
+sub boxquote {
+    my ($txt, $label) = @_;
+    my $res = ',----';
+    my $sep = $\;
+    $res .= "[ $label ]\n" if $label;
+    $res .= join "\n", map { "| $_" } split $/, $txt;
+    $res .= "\n`----";
+    return $res;
+}
+
 # poor man's hex dumper :)
 sub hexdump {
     my $data = shift;
@@ -325,6 +343,7 @@ sub usage {
     -f from                - optional, but strongly encouraged
     -s subject
     -a file1[,file2,fileN] - optional, several filenames separated by coma accepted
+    -m mime-type           - optional, force mime-type for message encoding (disable utf-8 validation)
     -S                     - sign the mail (optional)
     -c cert                - certificate for signing (optional, default = smime.cert)
     -k key                 - key for signing         (optional, default = smime.key)
