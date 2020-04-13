@@ -9,6 +9,7 @@ A simple command-line Perl email helper that can send multipart messages with at
     -f from                - optional, but strongly encouraged
     -s subject
     -a file1[,file2,fileN] - optional, several filenames separated by coma accepted
+                             you can specify a single path or a tuple path:mime:name for each attachment
     -m mime-type           - optional, force mime-type for message encoding (disable utf-8 validation)
     -S                     - sign the mail (optional)
     -c cert                - certificate for signing (optional, default = smime.cert)
@@ -29,6 +30,12 @@ Send w/ attachments:
 --
 
     smime_send.pl -t alice [-f bob] -s 'some stuff' -a file1,file2,fileN message.txt
+
+
+    Note: since v1.2 you can specify the mime-type and/or the name of the attachment if it cannot be determined
+          automatically, or if you want to rename it
+          ${cmd} -t alice [-f bob] -s 'some stuff' -a path/to/fileFOO::fileBAR,path/to/fileBAR::fileBROL
+          ${cmd} -t alice [-f bob] -s 'some stuff' -a <(some command output | gzip -c):application/gzip:data.txt.gz
 
 Sign a clear message (including possible attachments)
 --

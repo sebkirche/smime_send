@@ -18,7 +18,7 @@ use MIME::QuotedPrint;
 use POSIX;
 use Symbol;                     # for gensym
 
-my $VERSION = '1.1';
+my $VERSION = '1.2';
 
 # Poor man's logger
 use constant ERROR => 1;
@@ -72,11 +72,12 @@ my $subject = is_valid_utf8($opts->{s}) ? encode_quoted_utf8($opts->{s}) : $opts
 my $message = '';
 my @attachments = ();
 if ($opts->{a}){
-    for my $f (split /,/, $opts->{a}){
-        if (-f $f){
-            push @attachments, $f;
+    for my $a (split /,/, $opts->{a}){
+        my ($p, $t, $n) = split /:/, $a;
+        if (-r $p || -p $p){
+            push @attachments, {path => $p, type => $t, name => $n};
         } else {
-            die "incorrect file $f";
+            die "Incorrect / non accessible file $p";
         }
     }
 }
@@ -193,13 +194,17 @@ sub run_cmd {
 
 # prepare the content of a Base64 encoded data block from a file on disk
 sub attach_file {
-    my ($file, $boundary) = @_;
-    die "Incorrect file $file" unless -f $file;
+    my ($attach, $boundary) = @_;
+    my $file = $attach->{path};
+    my $mime = $attach->{type};
+    my $name = $attach->{name};
+    
+    die "Incorrect file $file" unless -f $file || -p $file;
     my $get_mime = "file --mime-type --brief \"$file\"";
-    my $mime = `$get_mime`; # avoid external dependency to package MIME
+    $mime = `$get_mime` unless $mime; # avoid external dependency to package MIME
     chomp $mime;
     
-    my $name = basename($file);
+    $name = basename($file) unless $name;
     open my $f, '<', $file or die "Cannot read $file: $!";
     binmode $f;
     my $buf;
@@ -343,6 +348,7 @@ sub usage {
     -f from                - optional, but strongly encouraged
     -s subject
     -a file1[,file2,fileN] - optional, several filenames separated by coma accepted
+                             you can specify a single path or a tuple path:mime:name for each attachment
     -m mime-type           - optional, force mime-type for message encoding (disable utf-8 validation)
     -S                     - sign the mail (optional)
     -c cert                - certificate for signing (optional, default = smime.cert)
@@ -358,6 +364,11 @@ sub usage {
 
   Send w/ attachments:
     ${cmd} -t alice [-f bob] -s 'some stuff' -a file1,file2,fileN message.txt
+
+    Note: since v1.2 you can specify the mime-type and/or the name of the attachment if it cannot be determined
+          automatically, or if you want to rename it
+          ${cmd} -t alice [-f bob] -s 'some stuff' -a path/to/fileFOO::fileBAR,path/to/fileBAR::fileBROL
+          ${cmd} -t alice [-f bob] -s 'some stuff' -a <(some command output | gzip -c):application/gzip:data.txt.gz
 
   Sign a clear message (including possible attachments)
     ${cmd} -t alice [-f bob] -s 'some stuff' -S message.txt # use default smime.cert/smime.key
