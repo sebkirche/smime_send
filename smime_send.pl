@@ -18,7 +18,7 @@ use MIME::QuotedPrint;
 use POSIX;
 use Symbol;                     # for gensym
 
-my $VERSION = '1.2';
+my $VERSION = '1.3';
 
 # Poor man's logger
 use constant ERROR => 1;
@@ -124,11 +124,11 @@ if ($sign){
     my $from = '';
     $from = "-from \"$from\"" if $from;
     my $cmd_sign = "openssl smime -sign -signer \"$cert\" -inkey \"$key\" $root $from -to \"$recipient\" -subject \"$subject\"";
-    say $cmd_sign;
+    say "Signing with command: $cmd_sign";
     my ($signed_body, $err) = run_cmd($cmd_sign, $body);
     die $err if $err;
     # chomp $signed_body;
-    say boxquote($signed_body, "signed body");
+    say boxquote($signed_body, "signed body") if $LOG_LVL == TRACE;
     $body = $signed_body;
 } else {
     # fill missing headers when not signing
@@ -159,33 +159,68 @@ exit 0;
 sub run_cmd {
     my ($cmd, $input) = @_;
     my ($infh,$outfh,$errfh,$pid, $out, $err);
+
+    my $send_offset = 0;
+    my $data_len = length($input);
+    my $write_block_len = 1024 * 100;
+    my $read_block_len = 1024 * 100;
+    
     $out = $err = '';
     $errfh = gensym();          # autovivified lexical cannot be used, generate a new symbol instead
     $pid = open3($infh, $outfh, $errfh, $cmd);
-    my $sel = new IO::Select;
-    $sel->add($outfh,$errfh);
-    print $infh $input;
-    close $infh;
-    while (my @ready = $sel->can_read){
-        foreach my $fh (@ready){
-            my $line =<$fh>;
-            if (not defined $line){
-                $sel->remove($fh);
-                next;
+    my $r_sel = new IO::Select($outfh,$errfh);
+    my $w_sel = new IO::Select($infh);
+    
+    # read/write loop
+    do {
+        # write part
+      WRITE:
+        # for(;;){
+            my @ready_w = $w_sel->can_write(0.05);
+            
+            # last WRITE if not @ready_w;   # pipe is full
+            
+            die if @ready_w !=1;
+            die if $ready_w[0] != $infh;
+            
+            my $wrote_bytes = syswrite($infh, $input, $write_block_len, $send_offset);
+            if (not defined $wrote_bytes){
+                die "unable to write to the pipe\n";
             }
-            if ($fh == $outfh){
-                # chomp($line);
-                $out .= $line;
+            if (not $wrote_bytes){
+                die "unable to write to the pipe: 0 byte written??";
             }
-            elsif ($fh == $errfh){
-                # chomp $line;
-                $err .= $line;
-            }
-            else {
-                die "Reading from something else?!!\n";
-            }
-        }
-    }
+            $infh->flush();
+            print 'W';
+            $send_offset += $wrote_bytes;
+            close $infh if $send_offset == $data_len;
+      # }
+
+        # read part
+      READ:
+            while (my @ready = $r_sel->can_read(0.08)){
+                last READ if @ready < 1;
+                foreach my $fh (@ready){
+                    my $read_bytes = $fh->sysread(my $buf, $read_block_len);
+                    print'R';
+                    if($read_bytes){
+                        if ($fh == $outfh){
+                            $out .= $buf;
+                        } elsif ($fh == $errfh){
+                            $err .= $buf;
+                        } else {
+                            die "Reading from something else?!!\n";
+                        }
+                    } else {
+                        if ($fh->eof){
+                            $r_sel->remove($fh);
+                        }
+                        next READ;
+                    }
+                    
+                }
+      }
+    } while ($send_offset < $data_len);
     close $outfh;
     close $errfh;
     waitpid($pid, 0);
