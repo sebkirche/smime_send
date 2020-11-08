@@ -9,7 +9,7 @@ use feature 'say';
 use utf8;
 use Digest::MD5;
 use File::Basename;
-use Getopt::Std;
+use Getopt::Long qw( :config no_ignore_case bundling) ;
 use IPC::Open3;
 use IO::Select;
 use Net::SMTP;
@@ -36,43 +36,59 @@ if (scalar @ARGV == 0){
     usage();
     exit 1;
 }
-unless (getopts("dt:f:s:a:c:k:r:m:x:SC:?h", $opts)){
-    usage();
-    exit 1;
-}
-if ($opts->{h} || $opts->{'?'}){
-    usage();
-    exit 0;
+GetOptions($opts,
+           "debug|d",
+           "to|t=s",
+           "cc=s",
+           "bcc=s",
+           "from|f=s",
+           "subject|s=s",
+           "attach|a=s",
+           "cert|c=s",
+           "key|k=s",
+           "root|r=s",
+           "mime|m=s",
+           "smtp|x=s",
+           "sign|S",
+           "cipher|C=s",
+           "help|?|h"
+    ) or usage_and_quit(1);
+
+if ($opts->{help}){
+    usage_and_quit(0);
 }
 
-$LOG_LVL = TRACE if $opts->{d};
-die "-c needs a valid certificate" if ($opts->{c} && ! -f $opts->{c});
-die "-k needs a valid key" if ($opts->{k} && ! -f $opts->{k});
-die "-r needs a valid certificate" if ($opts->{r} && ! -f $opts->{r});
+$LOG_LVL = TRACE if $opts->{debug};
+die "-c needs a valid certificate" if ($opts->{cert} && ! -f $opts->{cert});
+die "-k needs a valid key" if ($opts->{key} && ! -f $opts->{key});
+die "-r needs a valid certificate" if ($opts->{root} && ! -f $opts->{root});
 # die "-C needs a valid certificate" unless $opts->{C};
-die "Missing parameter: -t <recipient>" unless $opts->{t};
+die "Missing parameter: -t <recipient>" unless $opts->{to};
 # die "Missing parameter: -f <from> when signing" if $opts->{S} && !$opts->{f};
-die "Missing parameter: -s <subject>" unless $opts->{s};
+die "Missing parameter: -s <subject>" unless $opts->{subject};
 
-my $cert = $opts->{c} || 'smime.cert';
-my $key  = $opts->{k} || 'smime.key';
-my $root = $opts->{r} ? "-certfile $opts->{r}" : '';
-my $crypt  = $opts->{C};
-my $sign = $opts->{S};
-my $smtp = $opts->{x} || '127.0.0.1';
-my $mime_type = $opts->{m};
+my $cert = $opts->{cert} || 'smime.cert';
+my $key  = $opts->{key} || 'smime.key';
+my $root = $opts->{root} ? "-certfile $opts->{root}" : '';
+my $crypt  = $opts->{cipher};
+my $sign = $opts->{sign};
+my $smtp = $opts->{smtp} || '127.0.0.1';
+my $mime_type = $opts->{mime};
 
-my $recipient = $opts->{t};
-$recipient = parse_address($recipient);
-
-my $from = $opts->{f};
+my $from = $opts->{from} || $ENV{USER};
 $from = parse_address($from) if $from;
 
-my $subject = is_valid_utf8($opts->{s}) ? encode_quoted_utf8($opts->{s}) : $opts->{s};
+my $recipient = $opts->{to};
+$recipient = parse_address($recipient);
+
+my $subject = is_valid_utf8($opts->{subject}) ? encode_quoted_utf8($opts->{subject}) : $opts->{subject};
 my $message = '';
+my $date = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
+my $agent = sprintf "%s v%s", basename($0), $VERSION;
+
 my @attachments = ();
-if ($opts->{a}){
-    for my $a (split /,/, $opts->{a}){
+if ($opts->{attach}){
+    for my $a (split /,/, $opts->{attach}){
         my ($p, $t, $n) = split /:/, $a;
         if (-r $p || -p $p){
             push @attachments, {path => $p, type => $t, name => $n};
@@ -90,7 +106,7 @@ while (defined (my $line = <>)){
 my $body;
 
 # say "Message: $message";
-my $bound = new_boundary();
+my $bound = new_boundary_id();
 $body .= new_mm('multipart/mixed', $bound);
 
 if ($mime_type){
@@ -110,9 +126,12 @@ $body .= last_part($bound);
 
 say boxquote($body, "Body - before enc/sign") if $LOG_LVL == TRACE;
 
+my @heads;
+
 # process encryption
 if ($crypt){
     my $cmd_crypt = "openssl smime -encrypt -aes256 \"${crypt}\" ";
+    say "Encrypting with command: $cmd_crypt";
     my ($enc_body, $err) = run_cmd($cmd_crypt, $body);
     die $err if $err;
     $body = $enc_body;
@@ -121,9 +140,11 @@ if ($crypt){
 say boxquote($body, "Body - before sign") if $LOG_LVL == TRACE;
 # process signing
 if ($sign){
-    my $from = '';
-    $from = "-from \"$from\"" if $from;
-    my $cmd_sign = "openssl smime -sign -signer \"$cert\" -inkey \"$key\" $root $from -to \"$recipient\" -subject \"$subject\"";
+    my ($s_from, $s_to, $s_subject) = ('', '', '');
+    $s_from = "-from \"$from\"" if $from;
+    $s_to = "-to \"$recipient\"" if $recipient;
+    $s_subject = "-subject \"$subject\"" if $subject;
+    my $cmd_sign = "openssl smime -sign -signer \"$cert\" -inkey \"$key\" $root $s_from $s_to $s_subject";
     say "Signing with command: $cmd_sign";
     my ($signed_body, $err) = run_cmd($cmd_sign, $body);
     die $err if $err;
@@ -132,22 +153,32 @@ if ($sign){
     $body = $signed_body;
 } else {
     # fill missing headers when not signing
-    my $date = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
     # my $date = 'Mon,  6 Jan 2020 20:34:38 +0100 (CET)'; # a fixed date for test
-    $body = "From: ${from}\n${body}" if $from;
     $body = <<BODY
-To: ${recipient}
-Subject: ${subject}
-Date: ${date}
-MIME-Version: 1.0
 ${body}
 BODY
 }
 
+push @heads, "From: ${from}" unless $sign;
+push @heads, "To: $opts->{to}" if $opts->{to} && ! $sign;
+push @heads, "Cc: $opts->{cc}" if $opts->{cc};
+push @heads, "Subject: $opts->{subject}" if $opts->{subject} && ! $sign;
+push @heads, "Date: ${date}";
+push @heads, "MIME-Version: 1.0";
+push @heads, "User-Agent: ${agent}";
+my $heads_str = join "\n", @heads;
+$body = $heads_str . "\n" . $body;
+
 say boxquote($body, "Final Body") if $LOG_LVL == TRACE;
 
 # send to MX
-send_mail($from, $recipient, $body);
+send_mail({
+    from    => $from,
+    to      => $recipient,
+    cc      => $opts->{cc},
+    bcc     => $opts->{bcc},
+    message => $body
+          });
 
 say "Sent.";
 
@@ -265,7 +296,7 @@ sub add_part {
 }
 
 # generate a new boundary "unique" ID
-sub new_boundary {
+sub new_boundary_id {
     my $d = new Digest::MD5;
     $d->add(time);
     return $d->hexdigest;
@@ -286,10 +317,9 @@ sub new_mm {
 
 # send mail helper
 sub send_mail {
-    my ($from, $to, $message) = @_;
-    
-    
-    my $agent = sprintf "%s v%s", basename($0), $VERSION;
+    my $args = shift;
+    my @heads;
+
     my $mx = new Net::SMTP($smtp,
                            Timeout => 180,
                            $LOG_LVL == TRACE ? (Debug => 1) : ()
@@ -298,16 +328,18 @@ sub send_mail {
         say "Cannot use the default SMTP at $smtp: $@\nPlease look at the -x <smtp_server> parameter.";
         exit 1;
     }
-    $mx->mail($from);
-    $mx->to(split /,/, $to);
+    
+    $mx->mail($args->{from});
+    $mx->to(split /,/, $args->{to}) if $args->{to};
+    $mx->cc(split /,/, $args->{cc}) if $args->{cc};
+    $mx->bcc(split /,/, $args->{bcc}) if $args->{bcc};
     $mx->data();
-    $mx->datasend(<<"MSG");
-User-Agent: ${agent}
-${message}
-MSG
+    $mx->datasend($args->{message});
     $mx->dataend();
     $mx->quit();
 }
+
+
 
 sub encode_quoted_utf8 {
     my $str = shift;
@@ -418,5 +450,11 @@ sub usage {
     DST=your.recipient\@mail.com; \
         ${cmd} -t \"\$DST\" -S -r root-ca.pem -C <(ldapsearch -x -h ldapsvr:389 -D 'your_bind_DN' -w 'yourpwd' -b 'your_base_DN' -s sub -o ldif-wrap=no -LLL \"(userPrincipalName=\$DST)\" userCertificate | grep userCertificate | cut -d' ' -f2 | base64 -d | openssl x509 -inform der) -f alice -s 'somer stuff' msg.txt
 ";
+}
 
+sub usage_and_quit {
+    my $code = shift;
+    
+    usage();
+    exit $code;
 }
