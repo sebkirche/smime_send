@@ -63,7 +63,7 @@ die "-c needs a valid certificate" if ($opts->{cert} && ! -f $opts->{cert});
 die "-k needs a valid key" if ($opts->{key} && ! -f $opts->{key});
 die "-r needs a valid certificate" if ($opts->{root} && ! -f $opts->{root});
 # die "-C needs a valid certificate" unless $opts->{C};
-die "Missing parameter: -t <recipient>" unless $opts->{to};
+die "Missing parameter: -t <recipient>" unless $opts->{to} || $opts->{bcc};
 # die "Missing parameter: -f <from> when signing" if $opts->{S} && !$opts->{f};
 die "Missing parameter: -s <subject>" unless $opts->{subject};
 
@@ -78,9 +78,23 @@ my $mime_type = $opts->{mime};
 my $from = $opts->{from} || $ENV{USER};
 $from = parse_address($from) if $from;
 
-my $recipient = $opts->{to};
-$recipient = parse_address($recipient);
+my $recipients;
+if ($opts->{to}){
+    $recipients = join ',', map { parse_address $_ } split(/,/, $opts->{to});
+} else {
+    $recipients = 'undisclosed-recipients:;';
+}
 
+my $cc;
+if ($opts->{cc}){
+    $cc = join ',', map { parse_address($_) } split(/,/, $opts->{cc});
+}
+    
+my $bcc;
+if ($opts->{bcc}){
+    $bcc = join ',', map { parse_address($_) } split(/,/, $opts->{bcc});
+}
+    
 my $subject = is_valid_utf8($opts->{subject}) ? encode_quoted_utf8($opts->{subject}) : $opts->{subject};
 my $message = '';
 my $date = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
@@ -142,7 +156,7 @@ say boxquote($body, "Body - before sign") if $LOG_LVL == TRACE;
 if ($sign){
     my ($s_from, $s_to, $s_subject) = ('', '', '');
     $s_from = "-from \"$from\"" if $from;
-    $s_to = "-to \"$recipient\"" if $recipient;
+    $s_to = "-to \"$recipients\"" if $recipients;
     $s_subject = "-subject \"$subject\"" if $subject;
     my $cmd_sign = "openssl smime -sign -signer \"$cert\" -inkey \"$key\" $root $s_from $s_to $s_subject";
     say "Signing with command: $cmd_sign";
@@ -154,14 +168,11 @@ if ($sign){
 } else {
     # fill missing headers when not signing
     # my $date = 'Mon,  6 Jan 2020 20:34:38 +0100 (CET)'; # a fixed date for test
-    $body = <<BODY
-${body}
-BODY
 }
 
 push @heads, "From: ${from}" unless $sign;
-push @heads, "To: $opts->{to}" if $opts->{to} && ! $sign;
-push @heads, "Cc: $opts->{cc}" if $opts->{cc};
+push @heads, "To: ${recipients}" if $recipients && ! $sign;
+push @heads, "Cc: ${cc}" if $cc;
 push @heads, "Subject: $opts->{subject}" if $opts->{subject} && ! $sign;
 push @heads, "Date: ${date}";
 push @heads, "MIME-Version: 1.0";
@@ -174,9 +185,9 @@ say boxquote($body, "Final Body") if $LOG_LVL == TRACE;
 # send to MX
 send_mail({
     from    => $from,
-    to      => $recipient,
-    cc      => $opts->{cc},
-    bcc     => $opts->{bcc},
+    to      => $recipients,
+    cc      => $cc,
+    bcc     => $bcc,
     message => $body
           });
 
