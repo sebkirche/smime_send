@@ -80,7 +80,7 @@ $from = parse_address($from) if $from;
 
 my $recipients;
 if ($opts->{to}){
-    $recipients = join ',', map { parse_address $_ } split(/,/, $opts->{to});
+    $recipients = join ',', map { parse_address($_) } split(/,/, $opts->{to});
 } else {
     $recipients = 'undisclosed-recipients:;';
 }
