@@ -3,20 +3,30 @@
 A simple command-line Perl email helper that can send multipart messages with attachments and support S/MIME signature and encryption (we are calling openSSL for this).
 
     Usage: smime_send.pl [options] <message_or_file>
-    -x smtp_server         - default is 127.0.0.1
-    -t to                  - mail recipient (multiple coma-separated values accepted
-                                             NOT SUPPORTED YET FOR ENCRYPTION)
-    -f from                - optional, but strongly encouraged
-    -s subject
-    -a file1[,file2,fileN] - optional, several filenames separated by coma accepted
-                             you can specify a single path or a tuple path:mime:name for each attachment
-    -m mime-type           - optional, force mime-type for message encoding (disable utf-8 validation)
-    -S                     - sign the mail (optional)
-    -c cert                - certificate for signing (optional, default = smime.cert)
-    -k key                 - key for signing         (optional, default = smime.key)
-    -r root-ca             - optional, to avoid validation problems use the cert authority signer bundle
-    -C recipent-cert       - encrypt the mail (optional)
-    -d                     - debug = be very verbose
+    --smtp|-x smtp_server           - default is 127.0.0.1
+    --to|-t to                      - mail recipient(s) - multiple coma-separated values accepted
+                                                        - each recipient can be suffixed with encryption cert
+                                      e.g.: -t j.doe\@domain.com:jdoe.pem,foo.bar\@baz.brol:foobar.pem
+                                      if not provided but you have cc/bcc, will use undisclosed-recipients
+    --cc                            - optional, list of carbon-copy recipients
+    --bcc                           - optional, list of blind-carbon-copy recipients
+    --from|-f from                  - optional (but strongly encouraged), specify the sender
+    --subject|-s subject            - what you want to fill as email subject
+    --attach|-a file1[,file2,fileN] - optional, attach a file to the message, its MIME-type will be guessed with 'file'
+                                      several filenames separated by coma accepted
+                                      you can specify a single path or a tuple path:mime[:name] for each attachment
+                                      Note: MS Outlook DOES NOT CARE OF MIME TYPE
+                                            -> you should specify a name with proper extension
+    --mime|-m mime-type             - optional, force mime-type for message encoding (disable utf-8 validation)
+    --plain|p                       - optional, force plain-text body and disable mime encoding and attachments
+    --sign|-S                       - optional, sign the mail (will need the signing key and cert)
+    --cert|-c cert                  - certificate for signing (optional, default = smime.cert)
+    --key|-k key                    - key for signing         (optional, default = smime.key)
+    --root|-r root-ca               - optional, to avoid validation problems use the cert authority signer bundle
+    --cipher|-C recipent-cert       - encrypt the mail with the given cert (optional)
+                                      you can use instead the alternative way with the ':certificate' after recipients
+    --version|-V                    - display the version and quit
+    --debug|-d                      - debug = be very verbose
 
 Send simple mail:
 --

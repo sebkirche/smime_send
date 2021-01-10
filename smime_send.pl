@@ -48,6 +48,7 @@ GetOptions($opts,
            "key|k=s",
            "root|r=s",
            "mime|m=s",
+           "plain|p",
            "smtp|x=s",
            "sign|S",
            "cipher|C=s",
@@ -72,6 +73,7 @@ die "-r needs a valid certificate" if ($opts->{root} && ! -f $opts->{root});
 die "Missing parameter: -t <recipient>" unless $opts->{to} || $opts->{cc} || $opts->{bcc};
 # die "Missing parameter: -f <from> when signing" if $opts->{S} && !$opts->{f};
 die "Missing parameter: -s <subject>" unless $opts->{subject};
+die "Cannot use --plain and --attach/--sign/--cipher simultaneously" if $opts->{plain} && ($opts->{attach} || $opts->{sign} || $opts->{cipher});
 
 my $cert        = $opts->{cert} || 'smime.cert';
 my $key         = $opts->{key} || 'smime.key';
@@ -132,22 +134,26 @@ my $body;
 
 # say "Message: $message";
 my $bound = new_boundary_id();
-$body .= new_mm('multipart/mixed', $bound);
+unless ($opts->{plain}){
+    $body .= new_mm('multipart/mixed', $bound);
 
-if ($mime_type){
-    $body .= add_part(mime => $mime_type, content => $message, boundary => $bound);
-} elsif (is_valid_utf8($message)){
-    $body .= add_part(mime => 'text/plain; charset=utf-8', content => $message, boundary => $bound);
+    if ($mime_type){
+        $body .= add_part(mime => $mime_type, content => $message, boundary => $bound);
+    } elsif (is_valid_utf8($message)){
+        $body .= add_part(mime => 'text/plain; charset=utf-8', content => $message, boundary => $bound);
+    } else {
+        $body .= add_part(mime => 'text/plain', content => $message, boundary => $bound);
+    }
+
+    # process attachments
+    for my $a (@attachments){
+        $body .= attach_file($a, $bound);
+    }
+
+    $body .= last_part($bound);
 } else {
-    $body .= add_part(mime => 'text/plain', content => $message, boundary => $bound);
+    $body = $message;
 }
-
-# process attachments
-for my $a (@attachments){
-    $body .= attach_file($a, $bound);
-}
-
-$body .= last_part($bound);
 
 say boxquote($body, "Body - before enc/sign") if $LOG_LVL == TRACE;
 
@@ -157,7 +163,7 @@ push @heads, "To: ${recipients}" if $recipients && ! $sign;
 push @heads, "Cc: ${cc}" if $cc;
 push @heads, "Subject: $opts->{subject}" if $opts->{subject} && ! $sign;
 push @heads, "Date: ${date}";
-push @heads, "MIME-Version: 1.0";
+push @heads, "MIME-Version: 1.0" unless $opts->{plain};
 push @heads, "User-Agent: ${agent}";
 my $heads_str = join "\n", @heads;
 
@@ -490,6 +496,7 @@ sub usage {
                                       Note: MS Outlook DOES NOT CARE OF MIME TYPE
                                             -> you should specify a name with proper extension
     --mime|-m mime-type             - optional, force mime-type for message encoding (disable utf-8 validation)
+    --plain|p                       - optional, force plain-text body and disable mime encoding and attachments
     --sign|-S                       - optional, sign the mail (will need the signing key and cert)
     --cert|-c cert                  - certificate for signing (optional, default = smime.cert)
     --key|-k key                    - key for signing         (optional, default = smime.key)
