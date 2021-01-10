@@ -18,7 +18,7 @@ use MIME::QuotedPrint;
 use POSIX;
 use Symbol;                     # for gensym
 
-my $VERSION = '1.3';
+my $VERSION = '1.4';
 
 # Poor man's logger
 use constant ERROR => 1;
@@ -51,11 +51,17 @@ GetOptions($opts,
            "smtp|x=s",
            "sign|S",
            "cipher|C=s",
-           "help|?|h"
+           "help|?|h",
+           "version|V"
     ) or usage_and_quit(1);
 
 if ($opts->{help}){
     usage_and_quit(0);
+}
+
+if ($opts->{version}){
+    say $VERSION;
+    exit 0;
 }
 
 $LOG_LVL = TRACE if $opts->{debug};
@@ -63,42 +69,47 @@ die "-c needs a valid certificate" if ($opts->{cert} && ! -f $opts->{cert});
 die "-k needs a valid key" if ($opts->{key} && ! -f $opts->{key});
 die "-r needs a valid certificate" if ($opts->{root} && ! -f $opts->{root});
 # die "-C needs a valid certificate" unless $opts->{C};
-die "Missing parameter: -t <recipient>" unless $opts->{to} || $opts->{bcc};
+die "Missing parameter: -t <recipient>" unless $opts->{to} || $opts->{cc} || $opts->{bcc};
 # die "Missing parameter: -f <from> when signing" if $opts->{S} && !$opts->{f};
 die "Missing parameter: -s <subject>" unless $opts->{subject};
 
-my $cert = $opts->{cert} || 'smime.cert';
-my $key  = $opts->{key} || 'smime.key';
-my $root = $opts->{root} ? "-certfile $opts->{root}" : '';
-my $crypt  = $opts->{cipher};
-my $sign = $opts->{sign};
-my $smtp = $opts->{smtp} || '127.0.0.1';
-my $mime_type = $opts->{mime};
+my $cert        = $opts->{cert} || 'smime.cert';
+my $key         = $opts->{key} || 'smime.key';
+my $root        = $opts->{root} ? "-certfile $opts->{root}" : '';
+my $crypt       = $opts->{cipher};
+my $sign        = $opts->{sign};
+my $smtp        = $opts->{smtp} || '127.0.0.1';
+my $mime_type   = $opts->{mime};
+my $crypt_certs = {};
 
 my $from = $opts->{from} || $ENV{USER};
-$from = parse_address($from) if $from;
+($from) = parse_address($from) if $from; # parse_address() returns a list of 2 values
 
+my @normal_recipients = ();
+my @cipher_recipients = ();
 my $recipients;
 if ($opts->{to}){
-    $recipients = join ',', map { parse_address($_) } split(/,/, $opts->{to});
-} else {
-    $recipients = 'undisclosed-recipients:;';
+    $recipients = process_recipient_opt_string($opts->{to}, \@normal_recipients, \@cipher_recipients);
 }
 
 my $cc;
 if ($opts->{cc}){
-    $cc = join ',', map { parse_address($_) } split(/,/, $opts->{cc});
+    $cc = process_recipient_opt_string($opts->{cc}, \@normal_recipients, \@cipher_recipients);
 }
     
 my $bcc;
 if ($opts->{bcc}){
-    $bcc = join ',', map { parse_address($_) } split(/,/, $opts->{bcc});
+    $bcc = process_recipient_opt_string($opts->{bcc}, \@normal_recipients, \@cipher_recipients);
 }
-    
+
+unless($recipients){
+    $recipients = 'undisclosed-recipients:;';
+}
+
 my $subject = is_valid_utf8($opts->{subject}) ? encode_quoted_utf8($opts->{subject}) : $opts->{subject};
 my $message = '';
-my $date = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
-my $agent = sprintf "%s v%s", basename($0), $VERSION;
+my $date    = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
+my $agent   = sprintf "%s/%s", basename($0), $VERSION;
 
 my @attachments = ();
 if ($opts->{attach}){
@@ -141,36 +152,7 @@ $body .= last_part($bound);
 say boxquote($body, "Body - before enc/sign") if $LOG_LVL == TRACE;
 
 my @heads;
-
-# process encryption
-if ($crypt){
-    my $cmd_crypt = "openssl smime -encrypt -aes256 \"${crypt}\" ";
-    say "Encrypting with command: $cmd_crypt";
-    my ($enc_body, $err) = run_cmd($cmd_crypt, $body);
-    die $err if $err;
-    $body = $enc_body;
-}
-
-say boxquote($body, "Body - before sign") if $LOG_LVL == TRACE;
-# process signing
-if ($sign){
-    my ($s_from, $s_to, $s_subject) = ('', '', '');
-    $s_from = "-from \"$from\"" if $from;
-    $s_to = "-to \"$recipients\"" if $recipients;
-    $s_subject = "-subject \"$subject\"" if $subject;
-    my $cmd_sign = "openssl smime -sign -signer \"$cert\" -inkey \"$key\" $root $s_from $s_to $s_subject";
-    say "Signing with command: $cmd_sign";
-    my ($signed_body, $err) = run_cmd($cmd_sign, $body);
-    die $err if $err;
-    # chomp $signed_body;
-    say boxquote($signed_body, "signed body") if $LOG_LVL == TRACE;
-    $body = $signed_body;
-} else {
-    # fill missing headers when not signing
-    # my $date = 'Mon,  6 Jan 2020 20:34:38 +0100 (CET)'; # a fixed date for test
-}
-
-push @heads, "From: ${from}" unless $sign;
+push @heads, "From: ${from}" if $from && ! $sign;
 push @heads, "To: ${recipients}" if $recipients && ! $sign;
 push @heads, "Cc: ${cc}" if $cc;
 push @heads, "Subject: $opts->{subject}" if $opts->{subject} && ! $sign;
@@ -178,20 +160,39 @@ push @heads, "Date: ${date}";
 push @heads, "MIME-Version: 1.0";
 push @heads, "User-Agent: ${agent}";
 my $heads_str = join "\n", @heads;
-$body = $heads_str . "\n" . $body;
 
-say boxquote($body, "Final Body") if $LOG_LVL == TRACE;
+say "Normal recipients: " . join ',', @normal_recipients if $opts->{debug} && @normal_recipients;
+say "Cipher recipients: " . join ',', @cipher_recipients if $opts->{debug} && @cipher_recipients;
+for my $addr (@cipher_recipients, join(',',@normal_recipients)){ # each ciphered recipient + normal recipients at once
+    my $body_to_send = $body;
 
-# send to MX
-send_mail({
-    from    => $from,
-    to      => $recipients,
-    cc      => $cc,
-    bcc     => $bcc,
-    message => $body
-          });
+    # process encryption
+    if ($crypt || $crypt_certs->{$addr}){
+        $body_to_send = crypt_body($body_to_send, $crypt_certs->{$addr} || $crypt);
+    }
 
-say "Sent.";
+    say boxquote($body, "Body - before sign") if $LOG_LVL == TRACE;
+    # process signing
+    if ($sign){
+        $body_to_send = sign_body($body_to_send, $from, $recipients, $subject);
+    } else {
+        # fill missing headers when not signing
+        # my $date = 'Mon,  6 Jan 2020 20:34:38 +0100 (CET)'; # a fixed date for test
+    }
+
+    $body_to_send = $heads_str . "\n" . $body_to_send;
+
+    say boxquote($body_to_send, "Final Body") if $LOG_LVL == TRACE;
+
+    # send to MX
+    send_mail({
+        from    => $from,
+        to      => $addr,
+        message => $body_to_send
+              });
+
+    say "Sent for $addr.";
+}
 
 exit 0;
 
@@ -233,7 +234,7 @@ sub run_cmd {
                 die "unable to write to the pipe: 0 byte written??";
             }
             $infh->flush();
-            print 'W';
+            print 'W' if $opts->{debug};
             $send_offset += $wrote_bytes;
             close $infh if $send_offset == $data_len;
       # }
@@ -244,7 +245,7 @@ sub run_cmd {
                 last READ if @ready < 1;
                 foreach my $fh (@ready){
                     my $read_bytes = $fh->sysread(my $buf, $read_block_len);
-                    print'R';
+                    print 'R' if $opts->{debug};
                     if($read_bytes){
                         if ($fh == $outfh){
                             $out .= $buf;
@@ -338,19 +339,47 @@ sub send_mail {
     unless ($mx){
         say "Cannot use the default SMTP at $smtp: $@\nPlease look at the -x <smtp_server> parameter.";
         exit 1;
+    } else {
+        say "Sending via " . $mx->banner if $LOG_LVL == TRACE;
     }
     
     $mx->mail($args->{from});
-    $mx->to(split /,/, $args->{to}) if $args->{to};
-    $mx->cc(split /,/, $args->{cc}) if $args->{cc};
-    $mx->bcc(split /,/, $args->{bcc}) if $args->{bcc};
-    $mx->data();
-    $mx->datasend($args->{message});
-    $mx->dataend();
+    my $feedback;
+    if ($mx->to(split /,/, $args->{to})){
+        $mx->data();
+        $mx->datasend($args->{message});
+        $mx->dataend();
+    } else {
+        say STDERR "Problem with MX: ". $mx->message();
+        exit 1;
+    }
     $mx->quit();
 }
 
+sub sign_body {
+    my ($body, $arg_from, $arg_recipients, $arg_subject) = @_;
+    my ($s_from, $s_to, $s_subject) = ('', '', '');
+    $s_from = "-from \"${arg_from}\"" if $arg_from;
+    $s_to = "-to \"${arg_recipients}\"" if $arg_recipients;
+    $s_subject = "-subject \"${arg_subject}\"" if $arg_subject;
+    my $cmd_sign = "openssl smime -sign -signer \"$cert\" -inkey \"$key\" $root $s_from $s_to $s_subject";
+    say "Signing with command: $cmd_sign";
+    my ($signed_body, $err) = run_cmd($cmd_sign, $body);
+    die $err if $err;
+    # chomp $signed_body;
+    say boxquote($signed_body, "signed body") if $LOG_LVL == TRACE;
+    return $signed_body;
+}
 
+sub crypt_body {
+    my ($body, $cert) = @_;
+    return '' unless $cert;
+    my $cmd_crypt = "openssl smime -encrypt -aes256 \"${cert}\" ";
+    say "Encrypting with command: $cmd_crypt";
+    my ($enc_body, $err) = run_cmd($cmd_crypt, $body);
+    die $err if $err;
+    return $enc_body;
+}
 
 sub encode_quoted_utf8 {
     my $str = shift;
@@ -358,14 +387,21 @@ sub encode_quoted_utf8 {
     return $str;
 }
 
-# sanitize address
+# sanitize a single recipient address
 sub parse_address {
     my $address = shift;
     my $display_name = '';
+    my $certificate;
     $address =~ s/\([^\)]*\)//g;   # remove comments - or old way to give display name
     if ($address =~ /(.*)?\s?<([^>]+)>/){
         $display_name = $1;
         $address = $2;
+    }
+    if ($address =~ /:\K(.+)/){
+        my $c = $1;
+        $address =~ s/:.+$//;
+        $certificate = $c;
+        # $crypt_certs->{$address} = $c;
     }
     if ($display_name){
         if (is_valid_utf8($display_name)){
@@ -373,7 +409,26 @@ sub parse_address {
         }
         $display_name = "${display_name} <${address}>";
     }
-    return $display_name || $address;
+    return $display_name || $address, $certificate;
+}
+
+# Process a coma-separated list of addresses
+# return the list of sanitized addresses
+# and push each address into the list of recipients to send in clear text or encrypted 
+sub process_recipient_opt_string {
+    my ($opt, $normal_list, $cipher_list) = @_;
+    my @ret_list;
+    for my $r (split(/,/, $opt)){
+        my ($addr, $cert) = parse_address($r);
+        if ($cert){
+            $crypt_certs->{$addr} = $cert;
+            push @$cipher_list, $addr;
+        } else {
+            push @$normal_list, $addr;
+        }
+        push @ret_list, $addr;
+    }
+    return join ',', @ret_list;
 }
 
 # is_valid_utf8 came from: http://people.netscape.com/ftang/utf8/isutf8.pl
@@ -420,20 +475,29 @@ sub hexdump {
 sub usage {
     my $cmd = basename($0);
     say "Usage: ${cmd} [options] <message_or_file>
-    -x smtp_server         - default is 127.0.0.1
-    -t to                  - mail recipient (multiple coma-separated values accepted
-                                             NOT SUPPORTED YET FOR ENCRYPTION)
-    -f from                - optional, but strongly encouraged
-    -s subject
-    -a file1[,file2,fileN] - optional, several filenames separated by coma accepted
-                             you can specify a single path or a tuple path:mime:name for each attachment
-    -m mime-type           - optional, force mime-type for message encoding (disable utf-8 validation)
-    -S                     - sign the mail (optional)
-    -c cert                - certificate for signing (optional, default = smime.cert)
-    -k key                 - key for signing         (optional, default = smime.key)
-    -r root-ca             - optional, to avoid validation problems use the cert authority signer bundle
-    -C recipent-cert       - encrypt the mail (optional)
-    -d                     - debug = be very verbose
+    --smtp|-x smtp_server           - default is 127.0.0.1
+    --to|-t to                      - mail recipient(s) - multiple coma-separated values accepted
+                                                        - each recipient can be suffixed with encryption cert
+                                      e.g.: -t j.doe\@domain.com:jdoe.pem,foo.bar\@baz.brol:foobar.pem
+                                      if not provided but you have cc/bcc, will use undisclosed-recipients
+    --cc                            - optional, list of carbon-copy recipients
+    --bcc                           - optional, list of blind-carbon-copy recipients
+    --from|-f from                  - optional (but strongly encouraged), specify the sender
+    --subject|-s subject            - what you want to fill as email subject
+    --attach|-a file1[,file2,fileN] - optional, attach a file to the message, its MIME-type will be guessed with 'file'
+                                      several filenames separated by coma accepted
+                                      you can specify a single path or a tuple path:mime[:name] for each attachment
+                                      Note: MS Outlook DOES NOT CARE OF MIME TYPE
+                                            -> you should specify a name with proper extension
+    --mime|-m mime-type             - optional, force mime-type for message encoding (disable utf-8 validation)
+    --sign|-S                       - optional, sign the mail (will need the signing key and cert)
+    --cert|-c cert                  - certificate for signing (optional, default = smime.cert)
+    --key|-k key                    - key for signing         (optional, default = smime.key)
+    --root|-r root-ca               - optional, to avoid validation problems use the cert authority signer bundle
+    --cipher|-C recipent-cert       - encrypt the mail with the given cert (optional)
+                                      you can use instead the alternative way with the ':certificate' after recipients
+    --version|-V                    - display the version and quit
+    --debug|-d                      - debug = be very verbose
 
   Send simple mail:
     echo 'Some message' | ${cmd} -to alice [-f bob] -s 'some stuff'
