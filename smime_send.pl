@@ -18,7 +18,7 @@ use MIME::QuotedPrint;
 use POSIX;
 use Symbol;                     # for gensym
 
-my $VERSION = '1.4';
+my $VERSION = '1.5';
 
 # Poor man's logger
 use constant ERROR => 1;
@@ -52,6 +52,7 @@ GetOptions($opts,
            "smtp|x=s",
            "sign|S",
            "cipher|C=s",
+           "quiet|q",
            "help|?|h",
            "version|V"
     ) or usage_and_quit(1);
@@ -197,7 +198,7 @@ for my $addr (@cipher_recipients, join(',',@normal_recipients)){ # each ciphered
         message => $body_to_send
               });
 
-    say "Sent for $addr.";
+    say "Sent for $addr." unless $opts->{quiet};
 }
 
 exit 0;
@@ -503,6 +504,7 @@ sub usage {
     --root|-r root-ca               - optional, to avoid validation problems use the cert authority signer bundle
     --cipher|-C recipent-cert       - encrypt the mail with the given cert (optional)
                                       you can use instead the alternative way with the ':certificate' after recipients
+    --quiet|-q                      - quiet = do not print progression messages
     --version|-V                    - display the version and quit
     --debug|-d                      - debug = be very verbose
 
@@ -516,7 +518,7 @@ sub usage {
 
     Note: since v1.2 you can specify the mime-type and/or the name of the attachment if it cannot be determined
           automatically, or if you want to rename it
-          ${cmd} -t alice [-f bob] -s 'some stuff' -a path/to/fileFOO::fileBAR,path/to/fileBAR::fileBROL
+          ${cmd} -t alice [-f bob] -s 'some stuff' -a path/to/fileFOO::fileBAR,path/to/fileBAZ::fileBROL
           ${cmd} -t alice [-f bob] -s 'some stuff' -a <(some command output | gzip -c):application/gzip:data.txt.gz
 
   Sign a clear message (including possible attachments)

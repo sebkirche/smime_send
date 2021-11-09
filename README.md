@@ -25,6 +25,7 @@ A simple command-line Perl email helper that can send multipart messages with at
     --root|-r root-ca               - optional, to avoid validation problems use the cert authority signer bundle
     --cipher|-C recipent-cert       - encrypt the mail with the given cert (optional)
                                       you can use instead the alternative way with the ':certificate' after recipients
+    --quiet|-q                      - quiet = do not print progression messages
     --version|-V                    - display the version and quit
     --debug|-d                      - debug = be very verbose
 
