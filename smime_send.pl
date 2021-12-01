@@ -18,7 +18,7 @@ use MIME::QuotedPrint;
 use POSIX;
 use Symbol;                     # for gensym
 
-my $VERSION = '1.5';
+my $VERSION = '1.6';
 
 # Poor man's logger
 use constant ERROR => 1;
@@ -42,6 +42,7 @@ GetOptions($opts,
            "cc=s",
            "bcc=s",
            "from|f=s",
+           "replyto=s",
            "subject|s=s",
            "attach|a=s",
            "cert|c=s",
@@ -110,6 +111,7 @@ unless($recipients){
 }
 
 my $subject = is_valid_utf8($opts->{subject}) ? encode_quoted_utf8($opts->{subject}) : $opts->{subject};
+my $replyto = $opts->{replyto};
 my $message = '';
 my $date    = strftime ("%a, %d %b %Y %T %z (%Z)", localtime time);
 my $agent   = sprintf "%s/%s", basename($0), $VERSION;
@@ -161,6 +163,7 @@ say boxquote($body, "Body - before enc/sign") if $LOG_LVL == TRACE;
 my @heads;
 push @heads, "From: ${from}" if $from && ! $sign;
 push @heads, "To: ${recipients}" if $recipients && ! $sign;
+push @heads, "Reply-To: ${replyto}" if $replyto;
 push @heads, "Cc: ${cc}" if $cc;
 push @heads, "Subject: $opts->{subject}" if $opts->{subject} && ! $sign;
 push @heads, "Date: ${date}";
@@ -490,6 +493,7 @@ sub usage {
     --cc                            - optional, list of carbon-copy recipients
     --bcc                           - optional, list of blind-carbon-copy recipients
     --from|-f from                  - optional (but strongly encouraged), specify the sender
+    --replyto                       - optional, address to send responses to instead of the sender
     --subject|-s subject            - what you want to fill as email subject
     --attach|-a file1[,file2,fileN] - optional, attach a file to the message, its MIME-type will be guessed with 'file'
                                       several filenames separated by coma accepted

@@ -11,6 +11,7 @@ A simple command-line Perl email helper that can send multipart messages with at
     --cc                            - optional, list of carbon-copy recipients
     --bcc                           - optional, list of blind-carbon-copy recipients
     --from|-f from                  - optional (but strongly encouraged), specify the sender
+    --replyto                       - optional, address to send responses to instead of the sender
     --subject|-s subject            - what you want to fill as email subject
     --attach|-a file1[,file2,fileN] - optional, attach a file to the message, its MIME-type will be guessed with 'file'
                                       several filenames separated by coma accepted
