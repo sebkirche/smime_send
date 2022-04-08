@@ -513,8 +513,8 @@ sub usage {
     --debug|-d                      - debug = be very verbose
 
   Send simple mail:
-    echo 'Some message' | ${cmd} -to alice [-f bob] -s 'some stuff'
-    ${cmd} -to alice [-f bob] -s 'some stuff' message.txt
+    echo 'Some message' | ${cmd} -t alice [-f bob] -s 'some stuff'
+    ${cmd} -t alice [-f bob] -s 'some stuff' message.txt
     Note: 'from' is optional but strongly encouraged to avoid \"From: MAILER-DAEMON\", machine owner or no sender.
 
   Send w/ attachments:
